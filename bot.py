@@ -17,23 +17,36 @@ def send_telegram_message(text):
     response = requests.post(url, data=payload)
     return response.json()
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     try:
-        data = request.get_json()
+        # Получаем данные из запроса — и из GET, и из POST
+        if request.method == 'GET':
+            data = request.args.to_dict()  # Параметры из URL
+        else:  # POST
+            data = request.get_json() or request.form.to_dict()  # JSON или form-data
+
         if not data:
             return jsonify({"error": "No data"}), 400
 
         print("Получен постбек:", data)
 
+        # Определяем событие
         event = data.get('event', '').lower()
+        # Если event не передан — попробуем определить по другим параметрам
+        if not event:
+            if 'trader_id' in data and 'click_id' in data:
+                event = 'reg'  # По умолчанию регистрация, если нет события
+
+        # Извлекаем нужные параметры
         click_id = data.get('click_id', 'N/A')
         country = data.get('country', 'N/A')
         trader_id = data.get('trader_id', 'N/A')
-        sumdep = data.get('sumdep', '0')
-        wdr_sum = data.get('wdr_sum', '0')
-        status = data.get('status', 'pending')
+        sumdep = data.get('sumdep', '0')      # сумма депозита
+        wdr_sum = data.get('wdr_sum', '0')    # сумма вывода
+        status = data.get('status', 'pending') # статус вывода
 
+        # Формируем сообщение в нужном формате
         if event == 'reg':
             msg = f"🔱reg👾{click_id}🌍{country}🆔{trader_id}🏴‍☠️"
         elif event == 'ftd':
@@ -52,6 +65,7 @@ def webhook():
         else:
             msg = f"❓Неизвестное событие: {event} | Данные: {data}"
 
+        # Отправляем в Telegram
         send_telegram_message(msg)
 
         return jsonify({"status": "ok"}), 200
