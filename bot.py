@@ -14,65 +14,76 @@ def send_telegram_message(text):
         "text": text,
         "parse_mode": "HTML"
     }
-    response = requests.post(url, data=payload)
-    return response.json()
+    try:
+        response = requests.post(url, data=payload, timeout=10)
+        return response.json()
+    except Exception as e:
+        print("Ошибка отправки в Telegram:", str(e))
+        return {"error": str(e)}
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     try:
-        # Получаем данные из запроса — и из GET, и из POST
+        # Получаем данные — GET или POST
         if request.method == 'GET':
-            data = request.args.to_dict()  # Параметры из URL
-        else:  # POST
-            data = request.get_json() or request.form.to_dict()  # JSON или form-data
+            data = request.args.to_dict()
+        else:
+            json_data = request.get_json(silent=True)
+            form_data = request.form.to_dict()
+            data = json_data if json_data else form_data
 
         if not data:
-            return jsonify({"error": "No data"}), 400
+            return jsonify({"error": "No data received"}), 400
 
         print("Получен постбек:", data)
 
-        # Определяем событие
-        event = data.get('event', '').lower()
-        # Если event не передан — попробуем определить по другим параметрам
+        # Безопасное извлечение параметров
+        click_id = data.get('click_id') or '0'
+        country = data.get('country') or 'N/A'
+        trader_id = data.get('trader_id') or 'N/A'
+        sumdep = data.get('sumdep') or '0'
+        wdr_sum = data.get('wdr_sum') or '0'
+        status = data.get('status') or 'pending'
+        ac = data.get('ac') or ''
+
+        # Определяем событие ТОЛЬКО из параметра event
+        event = (data.get('event') or '').lower()
+
+        # Если event не задан — НЕ угадываем! Просто игнорируем или логируем
         if not event:
-            if 'trader_id' in data and 'click_id' in data:
-                event = 'reg'  # По умолчанию регистрация, если нет события
+            msg = f"⚠️ Пропущено событие: нет параметра 'event'. Данные: {data}"
+            send_telegram_message(msg)
+            return jsonify({"status": "ignored", "reason": "missing event"}), 200
 
-        # Извлекаем нужные параметры
-        click_id = data.get('click_id', 'N/A')
-        country = data.get('country', 'N/A')
-        trader_id = data.get('trader_id', 'N/A')
-        sumdep = data.get('sumdep', '0')      # сумма депозита
-        wdr_sum = data.get('wdr_sum', '0')    # сумма вывода
-        status = data.get('status', 'pending') # статус вывода
-
-        # Формируем сообщение в нужном формате
+        # Формируем сообщение строго по шаблону
         if event == 'reg':
-            msg = f"🔱reg👾{click_id}🌍{country}🆔{trader_id}🏴‍☠️"
+            msg = f"🔱reg👾{click_id}🌍{country}🆔{trader_id}🦈{ac}"
         elif event == 'ftd':
-            msg = f"💵ftd👾{click_id}🌍{country}🆔{trader_id}💸{sumdep}🏴‍☠️"
+            msg = f"💵ftd👾{click_id}🌍{country}🆔{trader_id}💸{sumdep}🦈{ac}"
         elif event == 'deposit':
-            msg = f"💶dep👾{click_id}🌍{country}🆔{trader_id}💸{sumdep}🏴‍☠️"
+            msg = f"💶dep👾{click_id}🌍{country}🆔{trader_id}💸{sumdep}🦈{ac}"
         elif event == 'withdraw':
             if status in ['new', 'pending']:
-                msg = f"🟥wd👾{click_id}⏳pending🌍{country}🆔{trader_id}💸{wdr_sum}🏴‍☠️"
-            elif status in ['processed', 'success']:
-                msg = f"🟥wd👾{click_id}⏳success🌍{country}🆔{trader_id}💸{wdr_sum}🏴‍☠️"
-            elif status in ['cancelled', 'cancel']:
-                msg = f"🟥wd👾{click_id}⏳cancel🌍{country}🆔{trader_id}💸{wdr_sum}🏴‍☠️"
+                msg = f"🟥wd👾{click_id}⏳pending🌍{country}🆔{trader_id}💸{wdr_sum}🦈{ac}"
+            elif status in ['processed', 'success', 'approved']:
+                msg = f"🟥wd👾{click_id}⏳success🌍{country}🆔{trader_id}💸{wdr_sum}🦈{ac}"
+            elif status in ['cancelled', 'cancel', 'rejected']:
+                msg = f"🟥wd👾{click_id}⏳cancel🌍{country}🆔{trader_id}💸{wdr_sum}🦈{ac}"
             else:
-                msg = f"🟥wd👾{click_id}⏳{status}🌍{country}🆔{trader_id}💸{wdr_sum}🏴‍☠️"
+                msg = f"🟥wd👾{click_id}⏳{status}🌍{country}🆔{trader_id}💸{wdr_sum}🦈{ac}"
         else:
-            msg = f"❓Неизвестное событие: {event} | Данные: {data}"
+            msg = f"❓Неизвестное событие: '{event}' | Данные: {data}"
 
-        # Отправляем в Telegram
         send_telegram_message(msg)
 
-        return jsonify({"status": "ok"}), 200
+        return jsonify({"status": "ok", "event": event}), 200
 
     except Exception as e:
-        print("Ошибка:", str(e))
+        error_msg = f"❌ Ошибка в обработчике: {str(e)}"
+        print(error_msg)
+        send_telegram_message(error_msg)
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
